@@ -195,7 +195,8 @@ def delete_model_data(model_ids, output_dir):
     save_output_files(metadata, output_data, output_dir)
 
 def get_hessian_metrics(model, optimizer, criterion, X, y, 
-                        subsample_dim = 1024, iters=30, tol = 1e-4):
+                        subsample_dim = 1024, iters=30, tol = 1e-4,
+                        generator=generator):
     """Gets the sharpness of the Hessian or effective Hessian, depending on the
     optimizer. 
 
@@ -208,7 +209,7 @@ def get_hessian_metrics(model, optimizer, criterion, X, y,
         subsample_dim (int, optional): Number of samples to subsample for Hessian computation. Defaults to 1024.
         iters (int, optional): Number of power iteration steps. Defaults to 30.
         tol (float, optional): Tolerance for convergence in power iteration. Defaults to 1e-4.
-
+        generator (_type_, optional): Random generator for reproducibility. Defaults to seed.generator.
     Returns:
         tuple: Tuple containing the sharpness of the Hessian and effective Hessian (if applicable).
     """
