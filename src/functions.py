@@ -28,6 +28,8 @@ def sample_data(X, y, num_per_class):
     Returns:
         _type_: The subsampled data and labels
     """
+    rng = np.random.RandomState(seed.SEED)
+    
     X = np.asarray(X)
     y = np.asarray(y)
 
@@ -36,7 +38,7 @@ def sample_data(X, y, num_per_class):
 
     for c in classes:
         cls_idx = np.where(y == c)[0]
-        chosen = np.random.choice(cls_idx, num_per_class, replace=False)
+        chosen = rng.choice(cls_idx, num_per_class, replace=False)
         indices.append(chosen)
 
     indices = np.concatenate(indices)
