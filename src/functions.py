@@ -196,7 +196,7 @@ def delete_model_data(model_ids, output_dir):
     output_data = output_data[~output_data['model_id'].isin(model_ids)]
     save_output_files(metadata, output_data, output_dir)
 
-def get_hessian_metrics(model, optimizer, criterion, X, y, 
+def get_hessian_metrics(model, optimizer, criterion, X, y, t,
                         subsample_dim = 1024, iters=30, tol = 1e-4,
                         generator=generator):
     """Gets the sharpness of the Hessian or effective Hessian, depending on the
@@ -208,6 +208,7 @@ def get_hessian_metrics(model, optimizer, criterion, X, y,
         criterion (_type_): The loss function
         X (_type_): Input data
         y (_type_): Target labels
+        t (_type_): Current epoch or iteration
         subsample_dim (int, optional): Number of samples to subsample for Hessian computation. Defaults to 1024.
         iters (int, optional): Number of power iteration steps. Defaults to 30.
         tol (float, optional): Tolerance for convergence in power iteration. Defaults to 1e-4.
@@ -278,6 +279,33 @@ def get_hessian_metrics(model, optimizer, criterion, X, y,
             return D_sqrt * Hv(D_sqrt * v)
         
         lambda_A = power_iteration(Av)
+
+  
+    elif isinstance(optimizer, torch.optim.Adam):
+
+        g0 = optimizer.param_groups[0]
+        beta1, beta2 = g0["betas"]
+        eps = g0["eps"]
+
+        # get v_t
+        v_t = torch.cat([
+            optimizer.state[p]["exp_avg_sq"].reshape(-1)
+            for p in model.param_list
+            if p in optimizer.state and "exp_avg_sq" in optimizer.state[p]
+        ]).detach()
+
+        # bias corrections
+        bc1 = 1.0 - (beta1 ** t)
+        bc2 = 1.0 - (beta2 ** t)
+        v_hat = v_t / bc2
+
+        # Compute adaptive scaling matrix D (sqrt) for effective Hessian
+        D_sqrt = (v_hat + eps).pow(-0.25) / (bc1 ** 0.5)
+
+        def Av(v):
+            return D_sqrt * Hv(D_sqrt * v)
+
+        lambda_A = power_iteration(Av)
     else:
         lambda_A = None
 
@@ -341,7 +369,7 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
 
         if epoch % (epochs // 100) == 0:
             H_sharps[epoch], A_sharps[epoch] = get_hessian_metrics(
-                model, optimizer, criterion, X, y_loss
+                model, optimizer, criterion, X, y_loss, epoch + 1
             )
 
         with torch.no_grad():
@@ -371,6 +399,8 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
         "optimizer": optimizer.__class__.__name__,
         "criterion": criterion.__class__.__name__,
         "learning_rate": learning_rate,
+        "beta1": optimizer.param_groups[0].get('betas', (np.nan, np.nan))[0],
+        "beta2": optimizer.param_groups[0].get('betas', (np.nan, np.nan))[1],
         "momentum": momentum,
         "num_epochs": epochs,
         "time_minutes": round((time.time() - start) / 60, 2),
@@ -463,7 +493,7 @@ def train_sgd_model(model, optimizer, criterion, epochs, accuracy,
         if epoch % eval_interval == 0:
             # Compute Hessian on full batch
             H_sharps[epoch], A_sharps[epoch] = get_hessian_metrics(
-                model, optimizer, criterion, X, y_loss
+                model, optimizer, criterion, X, y_loss, epoch + 1
             )
 
             # Evaluate accuracy on full dataset
