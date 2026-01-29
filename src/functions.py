@@ -506,10 +506,14 @@ def train_sgd_model(model, optimizer, criterion, epochs, accuracy,
 
     print(f"Completed training of {model.__class__.__name__} with " +
           f"{optimizer.__class__.__name__} and learning rate " +
-          f"{optimizer.param_groups[0]['lr']}. Took {epoch} epoches and {round(time.time() - start, 2)} seconds")
+          f"{optimizer.param_groups[0]['lr']}. Took {epoch} epoches and {round(time.time() - start, 2)} seconds. " +
+          f"Final training accuracy: {train_acc:.4f}; Final testing accuracy: {test_acc:.4f}")
 
     metadata, output_data = setup_output_files(output_dir)
     model_id = metadata.shape[0] + 1
+
+    print(f"Saved with model_id {model_id}")
+    print("=================================================")
 
     metadata.loc[metadata.shape[0]] = {
         "model_id": model_id,
