@@ -20,3 +20,4 @@ torch.use_deterministic_algorithms(True)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 generator = torch.Generator(device=device).manual_seed(SEED)
+cpu_generator = torch.Generator(device='cpu').manual_seed(SEED)
