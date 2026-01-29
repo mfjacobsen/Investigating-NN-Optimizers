@@ -493,16 +493,20 @@ def train_sgd_model(model, optimizer, criterion, epochs, accuracy,
                 test_accuracies[epoch] = test_acc
                 
             model.train()
-        else:
-            # Use last computed value for early stopping check
-            train_acc = train_accuracies[epoch - 1] if epoch > 0 else 0.0
+        # else:
+        #     # Use last computed value for early stopping check
+        #     train_acc = train_accuracies[epoch - 1] if epoch > 0 else 0.0
 
         if (epoch+1) % 1000 == 0:
             print(f"Epoch [{epoch+1}/{epochs}], Loss: {train_losses[epoch]:.4f}, " +
                   f"Time: {round(((time.time() - start) / 60), 2)}, " +
-                  f"Train Acc: {train_accuracies[epoch]:.4f}, " +
-                  f"Test Acc: {test_accuracies[epoch]:.4f}")
+                  f"Train Acc: {train_acc:.4f}, " +
+                  f"Test Acc: {test_acc:.4f}")
         epoch += 1
+
+    print(f"Completed training of {model.__class__.__name__} with " +
+          f"{optimizer.__class__.__name__} and learning rate " +
+          f"{optimizer.param_groups[0]['lr']}. Took {epoch} epoches and {round(time.time() - start, 2)} seconds")
 
     metadata, output_data = setup_output_files(output_dir)
     model_id = metadata.shape[0] + 1
