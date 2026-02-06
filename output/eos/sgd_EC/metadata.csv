@@ -40,3 +40,15 @@ model_id,model_type,activation_function,optimizer,criterion,learning_rate,beta1,
 39,FullyConnectedNet,Tanh,SGD,MSELoss,0.04,,,2000,0.7
 40,FullyConnectedNet,Tanh,SGD,MSELoss,0.07,,,2000,0.62
 41,FullyConnectedNet,Tanh,SGD,MSELoss,0.09,,,2000,0.53
+42,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,2000,3.23
+43,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,2000,0.82
+44,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,2000,0.59
+45,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,2000,0.5
+46,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,2000,0.69
+47,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,2000,0.73
+48,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,81,12.8
+49,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,101,2.43
+50,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,221,2.65
+51,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,321,2.16
+52,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,501,1.73
+53,FullyConnectedNet,Tanh,SGD,MSELoss,0.05,,,861,1.62
