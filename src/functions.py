@@ -568,3 +568,139 @@ def train_sgd_model(model, optimizer, criterion, epochs, accuracy,
     })], ignore_index=True)
 
     save_output_files(metadata, output_data, output_dir)
+
+def train_minibatch_gd_model(model, optimizer, criterion, epochs, accuracy,
+                    train_loader, test_loader, output_dir):
+    """
+    Refactored to calculate batch sharpness as per 'Edge of Stochastic Stability'.
+    Calculates Hessian metrics on mini-batches during the training step.
+    """
+    print(f"Training {model.__class__.__name__} with " +
+          f"{optimizer.__class__.__name__} and learning rate " +
+          f"{optimizer.param_groups[0]['lr']} for {epochs} epochs.")
+
+    learning_rate = optimizer.param_groups[0]['lr']
+    momentum = optimizer.param_groups[0].get('momentum', 0.0)
+
+    model.to(device)
+    model.train()
+
+    # Arrays to store metrics per epoch
+    train_losses = np.full(epochs, np.nan)
+    train_accuracies = np.full(epochs, np.nan)
+    test_accuracies = np.full(epochs, np.nan)
+    H_sharps = np.full(epochs, np.nan)
+    A_sharps = np.full(epochs, np.nan)
+
+    start = time.time()
+    train_acc = 0.0
+    epoch = 0
+
+    while train_acc < accuracy and epoch < epochs:
+        epoch_loss = 0.0
+        num_batches = 0
+
+        # Accumulators for batch sharpness within this epoch
+        batch_H_list = []
+        batch_A_list = []
+
+        # Mini-batch training
+        for X_batch, y_batch in train_loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+
+            if isinstance(criterion, nn.MSELoss):
+                y_batch_loss = torch.nn.functional.one_hot(
+                    y_batch, num_classes=model.num_labels).float().to(device)
+            else:
+                y_batch_loss = y_batch
+
+            # --- EoS Metric Calculation ---
+            # We calculate sharpness on the batch BEFORE the optimizer step
+            # to see the curvature the optimizer is about to encounter.
+            # We sample every few batches or use a specific interval to save compute
+            if num_batches % 10 == 0: # Adjust frequency based on compute needs
+                h_s, a_s = get_hessian_metrics(
+                    model, optimizer, criterion, X_batch, y_batch_loss, epoch + 1
+                )
+                if h_s is not None: batch_H_list.append(h_s)
+                if a_s is not None: batch_A_list.append(a_s)
+
+            optimizer.zero_grad()
+            outputs = model(X_batch)
+            loss = criterion(outputs, y_batch_loss)
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            num_batches += 1
+
+        train_losses[epoch] = epoch_loss / num_batches
+
+        # Store average batch sharpness for this epoch
+        if batch_H_list:
+            H_sharps[epoch] = np.mean(batch_H_list)
+        if batch_A_list:
+            A_sharps[epoch] = np.mean(batch_A_list)
+
+        # Periodic Evaluation of Accuracy
+        eval_interval = max(1, epochs // 100)
+        if epoch % eval_interval == 0 or epoch == epochs - 1:
+            with torch.no_grad():
+                model.eval()
+
+                # Train accuracy
+                train_correct, train_total = 0, 0
+                for xb, yb in train_loader:
+                    xb = xb.to(device)
+                    out = model(xb)
+                    train_correct += (out.argmax(dim=1) == yb.to(device)).sum().item()
+                    train_total += yb.size(0)
+                train_acc = train_correct / train_total
+                train_accuracies[epoch] = train_acc
+
+                # Test accuracy
+                test_correct, test_total = 0, 0
+                for xb, yb in test_loader:
+                    xb = xb.to(device)
+                    out = model(xb)
+                    test_correct += (out.argmax(dim=1) == yb.to(device)).sum().item()
+                    test_total += yb.size(0)
+                test_accuracies[epoch] = test_correct / test_total
+
+            model.train()
+
+        if (epoch+1) % 100 == 0:
+            print(f"Epoch [{epoch+1}/{epochs}], Loss: {train_losses[epoch]:.4f}, " +
+                  f"Avg Batch Sharpness: {H_sharps[epoch]:.2f}, " +
+                  f"Train Acc: {train_acc:.4f}")
+        epoch += 1
+
+    # --- Saving Logic (Maintained from original) ---
+    metadata, output_data = setup_output_files(output_dir)
+    model_id = metadata.shape[0] + 1
+
+    metadata.loc[metadata.shape[0]] = {
+        "model_id": model_id,
+        "model_type": model.__class__.__name__,
+        "activation_function": model.activation.__name__,
+        "optimizer": optimizer.__class__.__name__,
+        "criterion": criterion.__class__.__name__,
+        "learning_rate": learning_rate,
+        "momentum": momentum,
+        "num_epochs": epoch,
+        "time_minutes": round((time.time() - start) / 60, 2),
+    }
+
+    new_output = pd.DataFrame({
+        "model_id": np.ones(epoch) * model_id,
+        "epoch": np.arange(1, epoch + 1),
+        "train_loss": train_losses[:epoch],
+        "sharpness_H": H_sharps[:epoch],
+        "sharpness_A": A_sharps[:epoch],
+        "test_accuracy": test_accuracies[:epoch],
+        "train_accuracy": train_accuracies[:epoch],
+    })
+
+    output_data = pd.concat([output_data, new_output], ignore_index=True)
+    save_output_files(metadata, output_data, output_dir)
+    print(f"Completed. Saved with model_id {model_id}")
