@@ -49,6 +49,38 @@ class FullyConnectedNet(nn.Module):
     def forward(self, x):
         return self.network(x)
     
+class PaperFCNet(nn.Module):
+    """Exact FC architecture from Cohen et al. (arXiv:2207.14484v2) for CIFAR-10.
+    5 hidden layers, width 200 each, tanh, init: var=1/fan_in, bias=0.
+    """
+    def __init__(self, input_size=3072, num_labels=10, hidden_size=200, seed=42):
+        super().__init__()
+        self.num_labels = num_labels
+        self.input_size = input_size
+        gen = torch.Generator().manual_seed(seed)
+        layers = [nn.Flatten()]
+        in_s = input_size
+        for _ in range(5):
+            layers.append(nn.Linear(in_s, hidden_size))
+            layers.append(nn.Tanh())
+            in_s = hidden_size
+        layers.append(nn.Linear(in_s, num_labels))
+        self.network = nn.Sequential(*layers)
+        self.param_list = list(self.parameters())
+        self._init_weights(gen)
+
+    def _init_weights(self, gen):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                fan_in = m.weight.shape[1]
+                std = 1.0 / (fan_in ** 0.5)  # var = 1/fan_in
+                m.weight.data.normal_(0, std, generator=gen)
+                m.bias.data.zero_()
+
+    def forward(self, x):
+        return self.network(x)
+
+
 class CNN(nn.Module):
     def __init__(self, num_classes=10):
         super().__init__()

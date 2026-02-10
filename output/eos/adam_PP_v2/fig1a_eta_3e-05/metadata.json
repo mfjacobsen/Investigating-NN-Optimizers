@@ -1,0 +1,11 @@
+{
+  "lr": 3e-05,
+  "beta1": 0.9,
+  "beta2": 0.999,
+  "eps": 1e-07,
+  "bias_correction": true,
+  "steps": 500,
+  "seed": 42,
+  "sharpness_every": 5,
+  "model_arch": "PaperFCNet_5x200_tanh"
+}

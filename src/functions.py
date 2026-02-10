@@ -58,25 +58,26 @@ def sample_data(X, y, num_per_class):
     indices = np.concatenate(indices)
     return X[indices], y[indices]
 
-def load_cifar_10(num_per_class=500, test_num_per_class=100):
+def load_cifar_10(num_per_class=500, test_num_per_class=100, use_full=False):
     """Loads CIFAR-10. Defaults to a 5k image subset with 1k test images.
 
     Args:
         num_per_class (int, optional): The number of training samples per class. Defaults to 500.
         test_num_per_class (int, optional): The number of test samples per class. Defaults to 100.
+        use_full (bool, optional): If True, use full CIFAR-10 (50k train, 10k test). Defaults to False.
 
     Returns:
         tuple: Tuple containing training data, training labels, test data, test labels.
     """
-
     DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-    
-    # Load raw CIFAR-10 
     train = datasets.CIFAR10(root=DATA_DIR, train=True,  download=True)
     test  = datasets.CIFAR10(root=DATA_DIR, train=False, download=True)
-    # # Subsample
-    X, y  = sample_data(train.data, train.targets, num_per_class)
-    X_test, y_test = sample_data(test.data, test.targets, test_num_per_class)
+    if use_full:
+        X, y = np.asarray(train.data), np.asarray(train.targets)
+        X_test, y_test = np.asarray(test.data), np.asarray(test.targets)
+    else:
+        X, y  = sample_data(train.data, train.targets, num_per_class)
+        X_test, y_test = sample_data(test.data, test.targets, test_num_per_class)
 
     # Convert to float and scale
     X  = X.astype(np.float32) / 255.0
