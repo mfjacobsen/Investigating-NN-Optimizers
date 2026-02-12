@@ -482,7 +482,6 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
         "optimizer": optimizer.__class__.__name__,
         "criterion": criterion.__class__.__name__,
         "learning_rate": learning_rate,
-<<<<<<< HEAD
         "beta1": optimizer.param_groups[0].get('betas', (np.nan, np.nan))[0],
         "beta2": optimizer.param_groups[0].get('betas', (np.nan, np.nan))[1],
         "momentum": momentum,
@@ -629,8 +628,6 @@ def train_sgd_model(model, optimizer, criterion, epochs, accuracy,
         "criterion": criterion.__class__.__name__,
         "learning_rate": learning_rate,
         "momentum": momentum,
-=======
->>>>>>> PP_adam_eos
         "num_epochs": epochs,
         "time_minutes": round((time.time() - start) / 60, 2),
     }
