@@ -15,7 +15,6 @@ Run the following block in the terminal in DSMLP to clone the GitHub repository
 and set-up the conda environment. The environment is installed in the scratch
 directory since the size of pytorch exceeds the the default location's storage
 quota.
-
 ``` bash
 cd ~
 mkdir -p /scratch/$USER/conda/envs
