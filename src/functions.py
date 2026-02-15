@@ -11,6 +11,22 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
+try:
+    from tqdm.auto import tqdm  # Uses notebook widget in Jupyter, text bar in terminal
+except ImportError:
+    def tqdm(iterable=None, total=None, desc=None, unit=None, **kwargs):
+        if iterable is not None:
+            return iterable
+        return _NullProgressBar()
+
+    class _NullProgressBar:
+        def update(self, n=1): pass
+        def set_postfix(self, **kwargs): pass
+        def close(self): pass
+        def write(self, s, file=None, end="\n"): print(s, end=end)
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
 device = seed.device
 generator = seed.generator
 
@@ -44,25 +60,26 @@ def sample_data(X, y, num_per_class):
     indices = np.concatenate(indices)
     return X[indices], y[indices]
 
-def load_cifar_10(num_per_class=500, test_num_per_class=100):
+def load_cifar_10(num_per_class=500, test_num_per_class=100, use_full=False):
     """Loads CIFAR-10. Defaults to a 5k image subset with 1k test images.
 
     Args:
         num_per_class (int, optional): The number of training samples per class. Defaults to 500.
         test_num_per_class (int, optional): The number of test samples per class. Defaults to 100.
+        use_full (bool, optional): If True, use full CIFAR-10 (50k train, 10k test). Defaults to False.
 
     Returns:
         tuple: Tuple containing training data, training labels, test data, test labels.
     """
-
     DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-    
-    # Load raw CIFAR-10 
     train = datasets.CIFAR10(root=DATA_DIR, train=True,  download=True)
     test  = datasets.CIFAR10(root=DATA_DIR, train=False, download=True)
-    # # Subsample
-    X, y  = sample_data(train.data, train.targets, num_per_class)
-    X_test, y_test = sample_data(test.data, test.targets, test_num_per_class)
+    if use_full:
+        X, y = np.asarray(train.data), np.asarray(train.targets)
+        X_test, y_test = np.asarray(test.data), np.asarray(test.targets)
+    else:
+        X, y  = sample_data(train.data, train.targets, num_per_class)
+        X_test, y_test = sample_data(test.data, test.targets, test_num_per_class)
 
     # Convert to float and scale
     X  = X.astype(np.float32) / 255.0
@@ -263,53 +280,98 @@ def get_hessian_metrics(model, optimizer, criterion, X, y, t,
         return eig
 
     lambda_H = power_iteration(Hv)
-    
+    lambda_A = None
+
     if isinstance(optimizer, torch.optim.RMSprop):
-        
         # Compute adaptive scaling matrix D (sqrt) for effective Hessian
         v_t = torch.cat([state['square_avg'].reshape(-1)
                         for state in optimizer.state.values()]
                         ).detach()
-
         eps = optimizer.param_groups[0]['eps']
         D_sqrt = torch.sqrt(1 / torch.sqrt(v_t + eps))
-
-        # Compute effective Hessian-vector product
         def Av(v):
             return D_sqrt * Hv(D_sqrt * v)
-        
         lambda_A = power_iteration(Av)
 
-  
-    elif isinstance(optimizer, torch.optim.Adam):
-
-        g0 = optimizer.param_groups[0]
-        beta1, beta2 = g0["betas"]
-        eps = g0["eps"]
-
-        # get v_t
-        v_t = torch.cat([
-            optimizer.state[p]["exp_avg_sq"].reshape(-1)
-            for p in model.param_list
-            if p in optimizer.state and "exp_avg_sq" in optimizer.state[p]
-        ]).detach()
-
-        # bias corrections
-        bc1 = 1.0 - (beta1 ** t)
-        bc2 = 1.0 - (beta2 ** t)
-        v_hat = v_t / bc2
-
-        # Compute adaptive scaling matrix D (sqrt) for effective Hessian
-        D_sqrt = (v_hat + eps).pow(-0.25) / (bc1 ** 0.5)
-
-        def Av(v):
-            return D_sqrt * Hv(D_sqrt * v)
-
-        lambda_A = power_iteration(Av)
-    else:
-        lambda_A = None
+    elif isinstance(optimizer, (torch.optim.Adam, torch.optim.AdamW)):
+        # Adam effective Hessian: S^(1/2) H S^(1/2), S = diag(1/(sqrt(v_hat)+eps))
+        scaling = _get_adam_scaling_vector(model, optimizer)
+        if scaling is not None:
+            if scaling.numel() != dim:
+                import warnings
+                warnings.warn(
+                    f"Adam scaling dim {scaling.numel()} != param dim {dim}; "
+                    "skipping lambda_eff."
+                )
+            else:
+                # S = diag(s), s = 1/(sqrt(v_hat)+eps) => S^(1/2) = diag(sqrt(s))
+                D_sqrt = torch.sqrt(torch.clamp(scaling, min=1e-12))
+                def Av(v):
+                    return D_sqrt * Hv(D_sqrt * v)
+                lambda_A = power_iteration(Av)
+        else:
+            lambda_A = None
 
     return lambda_H, lambda_A
+
+
+def _get_adam_scaling_vector(model, optimizer):
+    """Compute Adam scaling vector s = 1/(sqrt(v_hat)+eps) with bias correction.
+    Order matches model.param_list (same as gradient flattening).
+    Returns None if optimizer state not initialized.
+    """
+    if not hasattr(model, 'param_list'):
+        return None
+    eps = optimizer.param_groups[0].get('eps', 1e-8)
+    beta2 = optimizer.param_groups[0].get('betas', (0.9, 0.999))[1]
+    scaling_parts = []
+    for p in model.param_list:
+        state = optimizer.state.get(p)
+        if state is None or 'exp_avg_sq' not in state:
+            return None
+        exp_avg_sq = state['exp_avg_sq'].detach()
+        step = state.get('step', 1)
+        if step is None:
+            step = 1
+        # Bias-corrected second moment: v_hat = exp_avg_sq / (1 - beta2^step)
+        bc = 1.0 - beta2 ** step
+        if abs(bc) < 1e-12:
+            v_hat = exp_avg_sq
+        else:
+            v_hat = exp_avg_sq / bc
+        # s = 1 / (sqrt(v_hat) + eps)
+        s = 1.0 / (torch.sqrt(v_hat) + eps)
+        scaling_parts.append(s.reshape(-1))
+    return torch.cat(scaling_parts)
+
+
+def _get_adam_effective_step_stats(model, optimizer):
+    """Compute effective step size stats for Adam/AdamW: α/(√v̂+ε) per parameter.
+    Returns (mean, std, max) as Python floats, or (None, None, None) if not Adam or state missing.
+    """
+    if not isinstance(optimizer, (torch.optim.Adam, torch.optim.AdamW)):
+        return None, None, None
+    if not hasattr(model, 'param_list'):
+        return None, None, None
+    lr = optimizer.param_groups[0]['lr']
+    eps = optimizer.param_groups[0].get('eps', 1e-8)
+    beta2 = optimizer.param_groups[0].get('betas', (0.9, 0.999))[1]
+    steps = []
+    for p in model.param_list:
+        state = optimizer.state.get(p)
+        if state is None or 'exp_avg_sq' not in state:
+            return None, None, None
+        exp_avg_sq = state['exp_avg_sq'].detach()
+        step = state.get('step', 1)
+        if step is None:
+            step = 1
+        bc = 1.0 - beta2 ** step
+        v_hat = exp_avg_sq / bc if abs(bc) >= 1e-12 else exp_avg_sq
+        eff_lr = lr / (torch.sqrt(v_hat) + eps)
+        steps.append(eff_lr.reshape(-1))
+    all_steps = torch.cat(steps)
+    return all_steps.mean().item(), all_steps.std().item(), all_steps.max().item()
+
 
 def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_test, output_dir):
     """Trains the provided model with the specified optimizer and criterion for 
@@ -344,6 +406,9 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
     test_accuracies = np.full(epochs, np.nan)
     H_sharps = np.full(epochs, np.nan)
     A_sharps = np.full(epochs, np.nan)
+    eff_step_mean = np.full(epochs, np.nan)
+    eff_step_std = np.full(epochs, np.nan)
+    eff_step_max = np.full(epochs, np.nan)
 
     if isinstance(criterion, nn.MSELoss):
         y_loss = torch.nn.functional.one_hot(
@@ -353,11 +418,12 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
         y_loss = y.to(device)
 
     start = time.time()
-    
     train_acc = 0.0
     epoch = 0
 
-    while train_acc < accuracy and epoch < epochs :
+    pbar = tqdm(total=epochs, desc="Epochs", unit="epoch", dynamic_ncols=True)
+
+    while train_acc < accuracy and epoch < epochs:
 
         optimizer.zero_grad()
         outputs = model(X)
@@ -367,10 +433,15 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
 
         train_losses[epoch] = loss.item()
 
-        if epoch % (epochs // 100) == 0:
+        # Skip Hessian for short runs (epochs < 100) to speed up training
+        # For longer runs, compute at most ~20 times
+        if epochs >= 100 and epoch % max(100, epochs // 20) == 0:
             H_sharps[epoch], A_sharps[epoch] = get_hessian_metrics(
                 model, optimizer, criterion, X, y_loss, epoch + 1
             )
+            em, es, ex = _get_adam_effective_step_stats(model, optimizer)
+            if em is not None:
+                eff_step_mean[epoch], eff_step_std[epoch], eff_step_max[epoch] = em, es, ex
 
         with torch.no_grad():
             model.eval()
@@ -382,17 +453,29 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
             test_accuracies[epoch] = test_acc
         model.train()
 
-        if (epoch+1) % 1000 == 0:
-            print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}, " +
-                  f"Time: {round(((time.time() - start) / 60), 2)}, " +
-                  f"Train Acc: {train_accuracies[epoch]:.4f}, " +
-                  f"Test Acc: {test_accuracies[epoch]:.4f}, ")
+        pbar.update(1)
+        pbar.set_postfix(
+            loss=f"{loss.item():.4f}",
+            train_acc=f"{train_acc:.3f}",
+            test_acc=f"{test_acc:.3f}",
+        )
+
+        # Print progress at sensible intervals (works even without tqdm)
+        print_interval = max(1, epochs // 20)
+        if (epoch + 1) % print_interval == 0 or (epoch + 1) == epochs:
+            elapsed = round((time.time() - start) / 60, 2)
+            pbar.write(
+                f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}, "
+                f"Time: {elapsed} min, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}"
+            )
         epoch += 1
+
+    pbar.close()
 
     metadata, output_data = setup_output_files(output_dir)
     model_id = metadata.shape[0] + 1
 
-    metadata.loc[metadata.shape[0]] ={
+    meta_row = {
         "model_id": model_id,
         "model_type": model.__class__.__name__,
         "activation_function": model.activation.__name__,
