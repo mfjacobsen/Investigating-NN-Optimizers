@@ -3,6 +3,8 @@
 Python script version of PP_adam_eos.ipynb for SLURM execution.
 This script runs the training cells from the notebook.
 """
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import sys
 from pathlib import Path

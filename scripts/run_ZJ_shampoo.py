@@ -16,6 +16,7 @@ import os
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import sys
 from pathlib import Path

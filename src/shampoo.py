@@ -225,7 +225,7 @@ def train_shampoo_model(model, opt_shampoo, opt_adam, criterion, epochs, accurac
 
         if epoch % 50 == 0:
             H_sharps[epoch], _ = fn.get_hessian_metrics(
-                model, opt_shampoo, criterion, X, y_loss, generator=generator
+                model, opt_shampoo, criterion, X, y_loss, t=epoch, generator=generator
             )
             A_sharps[epoch] = max_shampoo_layer_sharpness(
                 model, opt_shampoo, criterion, X, y_loss, generator=generator

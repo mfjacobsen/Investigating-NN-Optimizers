@@ -11,6 +11,8 @@ Usage:
 
 Results are saved to output/eos/sgd_EC/.
 """
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import sys
 from pathlib import Path
