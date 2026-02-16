@@ -78,3 +78,16 @@ python scripts/run_PP_adam_eos_python.py
 ```
 
 Results are saved to `output/eos/` in subdirectories named by optimizer and author initials (e.g. `output/eos/shampoo_ZJ/`, `output/eos/sgd_EC/`, `output/eos/adam_PP/`).
+
+### Notebooks
+
+| Notebook | Description |
+|----------|-------------|
+| `ZJ_shampoo_eos.ipynb` | Shampoo optimizer EoS investigation |
+| `ZJ_muon_eos_batchsize.ipynb` | Muon optimizer minibatch size sweep |
+| `EC_sgd.ipynb` | SGD EoS investigation with minibatch training |
+| `PP_adam_eos.ipynb` | Adam optimizer EoS investigation |
+| `PP_adam_eos_v2.ipynb` | Adam optimizer EoS investigation (updated) |
+| `MJ_muon_eos.ipynb` | Muon optimizer EoS investigation |
+| `MJ_sgd_eos.ipynb` | SGD EoS investigation (full batch) |
+| `MJ_adam_eos.ipynb` | Adam optimizer EoS investigation |
