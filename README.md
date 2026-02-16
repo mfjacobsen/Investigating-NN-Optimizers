@@ -79,6 +79,8 @@ python scripts/run_PP_adam_eos_python.py
 
 Results are saved to `output/eos/` in subdirectories named by optimizer and author initials (e.g. `output/eos/shampoo_ZJ/`, `output/eos/sgd_EC/`, `output/eos/adam_PP/`).
 
+Plots and graphs are embedded in each notebook and can be viewed directly on GitHub.
+
 ### Notebooks
 
 | Notebook | Description |
