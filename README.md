@@ -1,6 +1,7 @@
 # Investigating-NN-Optimizers
 
 ### Local Setup
+
 Run the following code block to clone the Github repository and setup the 
 virtual environment:
 ```bash
@@ -57,65 +58,23 @@ cd ~/private/Investigating-NN-Optimizers
 conda env update -n inv-nn-opt-env -f environment.yml --prune
 ```
 
-### Using functions.py
-Load a 5k image subset of CIFAR-10 with 1k test images.
-```python
-X, y, X_test, y_test = functions.load_cifar_10()
+### Running Experiments
+
+From the repo root:
+
+**Shampoo EoS:**
+```bash
+python scripts/run_ZJ_shampoo.py
 ```
 
-Define model architecture for a fully-connected neural network. 2 hidden layers of
-200 neurons each is large enough to investigate phenomenon while small enough to 
-iterate quickly. This architecture should remain constant across models.
-```python
-input_size = X.shape[1] * X.shape[2] * X.shape[3]
-num_hidden_layers = 2
-hidden_layer_size = 200
+**SGD EoS:**
+```bash
+python scripts/run_EC_sgd.py
 ```
 
-Define the learning rate, max epochs, and accuracy of the model. Training stops
-when training accuracy reaches the accuracy variable or epochs reaches max_epochs. 
-Sharpness is computed every 1% of the way through max_epochs (if max epochs is 
-2,000 then sharpness is computed every 20 epochs.) Balance max_epochs and accuracy
-to ensure an appropriate number of sharpness computations exists in the output data
-for plotting.
-```python
-learning_rate = 0.01
-max_epochs = 20000
-accuracy = 0.99
+**Adam EoS:**
+```bash
+python scripts/run_PP_adam_eos_python.py
 ```
 
-Initialize the model, criteria, and optimizer.
-```python
-model = models.FullyConnectedNet(
-        input_size=input_size,
-        num_hidden_layers=num_hidden_layers,
-        hidden_layer_size=hidden_layer_size,
-        num_labels=10,
-        activation=nn.Tanh
-    )
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
-```
-
-Train the model and record the training data. It's critical to ensure that you save
-to the correct output directory. All of the file utility functions default to the 
-main output directory and include the metadata and output data csv file names. When working with
-output files, you only need to specify the subdirectory. For example, if you want 
-to save your output files in output/eos/sgd_EC, then output_dir="eos/sgd_EC". If 
-you want to load the output files from output/eos/adam_PP, then output_dir = "eos/sgd_PP":
-```python
-output_dir = "eos/muon_MJ"
-functions.train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_test, output_dir)
-```
-
-Load output data for plotting:
-```python
-md, out = functions.load_output_files(output_dir)
-```
-
-Another useful function for deleting model data from your output files if they
-are getting too large, or want to trim specific models from the file.
-```python
-model_ids = [1,4,5]
-delete_model_data(model_ids, output_dir)
-```
+Results are saved to `output/eos/` in subdirectories named by optimizer and author initials (e.g. `output/eos/shampoo_ZJ/`, `output/eos/sgd_EC/`, `output/eos/adam_PP/`).
