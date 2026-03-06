@@ -2,7 +2,7 @@ name: inv-nn-opt-env
 channels:
   - conda-forge
   - defaults
-
+  
 dependencies:
   - python=3.11
   - numpy=2.4.1
@@ -13,8 +13,10 @@ dependencies:
   - jupyterlab=4.*
   - ipykernel=7.1.*
   - pip=23.3.*
-
+  
   - pip:
       - torch==2.9.*
       - torchvision==0.24.*
       - plotly==6.5.*
+      - kaleido==0.2.1
+      - tqdm

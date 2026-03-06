@@ -10,6 +10,8 @@ class FullyConnectedNet(nn.Module):
                  num_labels, activation):
         super(FullyConnectedNet, self).__init__()
 
+        torch.manual_seed(seed.SEED)
+
         self.input_size = input_size
         self.num_hidden_layers = num_hidden_layers
         self.hidden_layers_size = hidden_layer_size

@@ -1,0 +1,6 @@
+model_id,model_type,activation_function,optimizer,criterion,learning_rate,beta1,beta2,num_epochs,time_minutes
+1,FullyConnectedNet,Tanh,Adam,MSELoss,0.003,,,4000,0.52
+2,FullyConnectedNet,Tanh,Adam,MSELoss,0.001,,,4000,0.52
+3,FullyConnectedNet,Tanh,Adam,MSELoss,0.0003,,,4000,0.52
+4,FullyConnectedNet,Tanh,Adam,MSELoss,0.0001,,,4000,0.5
+5,FullyConnectedNet,Tanh,Adam,MSELoss,3e-05,,,4000,0.5
