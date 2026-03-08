@@ -11,6 +11,22 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
+try:
+    from tqdm.auto import tqdm  # Uses notebook widget in Jupyter, text bar in terminal
+except ImportError:
+    def tqdm(iterable=None, total=None, desc=None, unit=None, **kwargs):
+        if iterable is not None:
+            return iterable
+        return _NullProgressBar()
+
+    class _NullProgressBar:
+        def update(self, n=1): pass
+        def set_postfix(self, **kwargs): pass
+        def close(self): pass
+        def write(self, s, file=None, end="\n"): print(s, end=end)
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
 device = seed.device
 generator = seed.generator
 
@@ -28,6 +44,8 @@ def sample_data(X, y, num_per_class):
     Returns:
         _type_: The subsampled data and labels
     """
+    rng = np.random.RandomState(seed.SEED)
+    
     X = np.asarray(X)
     y = np.asarray(y)
 
@@ -36,31 +54,32 @@ def sample_data(X, y, num_per_class):
 
     for c in classes:
         cls_idx = np.where(y == c)[0]
-        chosen = np.random.choice(cls_idx, num_per_class, replace=False)
+        chosen = rng.choice(cls_idx, num_per_class, replace=False)
         indices.append(chosen)
 
     indices = np.concatenate(indices)
     return X[indices], y[indices]
 
-def load_cifar_10(num_per_class=500, test_num_per_class=100):
+def load_cifar_10(num_per_class=500, test_num_per_class=100, use_full=False):
     """Loads CIFAR-10. Defaults to a 5k image subset with 1k test images.
 
     Args:
         num_per_class (int, optional): The number of training samples per class. Defaults to 500.
         test_num_per_class (int, optional): The number of test samples per class. Defaults to 100.
+        use_full (bool, optional): If True, use full CIFAR-10 (50k train, 10k test). Defaults to False.
 
     Returns:
         tuple: Tuple containing training data, training labels, test data, test labels.
     """
-
     DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-    
-    # Load raw CIFAR-10 
     train = datasets.CIFAR10(root=DATA_DIR, train=True,  download=True)
     test  = datasets.CIFAR10(root=DATA_DIR, train=False, download=True)
-    # # Subsample
-    X, y  = sample_data(train.data, train.targets, num_per_class)
-    X_test, y_test = sample_data(test.data, test.targets, test_num_per_class)
+    if use_full:
+        X, y = np.asarray(train.data), np.asarray(train.targets)
+        X_test, y_test = np.asarray(test.data), np.asarray(test.targets)
+    else:
+        X, y  = sample_data(train.data, train.targets, num_per_class)
+        X_test, y_test = sample_data(test.data, test.targets, test_num_per_class)
 
     # Convert to float and scale
     X  = X.astype(np.float32) / 255.0
@@ -194,8 +213,9 @@ def delete_model_data(model_ids, output_dir):
     output_data = output_data[~output_data['model_id'].isin(model_ids)]
     save_output_files(metadata, output_data, output_dir)
 
-def get_hessian_metrics(model, optimizer, criterion, X, y, 
-                        subsample_dim = 1024, iters=30, tol = 1e-4):
+def get_hessian_metrics(model, optimizer, criterion, X, y, t,
+                        subsample_dim = 1024, iters=30, tol = 1e-4,
+                        generator=generator):
     """Gets the sharpness of the Hessian or effective Hessian, depending on the
     optimizer. 
 
@@ -205,10 +225,11 @@ def get_hessian_metrics(model, optimizer, criterion, X, y,
         criterion (_type_): The loss function
         X (_type_): Input data
         y (_type_): Target labels
+        t (_type_): Current epoch or iteration
         subsample_dim (int, optional): Number of samples to subsample for Hessian computation. Defaults to 1024.
         iters (int, optional): Number of power iteration steps. Defaults to 30.
         tol (float, optional): Tolerance for convergence in power iteration. Defaults to 1e-4.
-
+        generator (_type_, optional): Random generator for reproducibility. Defaults to seed.generator.
     Returns:
         tuple: Tuple containing the sharpness of the Hessian and effective Hessian (if applicable).
     """
@@ -259,21 +280,43 @@ def get_hessian_metrics(model, optimizer, criterion, X, y,
         return eig
 
     lambda_H = power_iteration(Hv)
-    
+    lambda_A = None
+
     if isinstance(optimizer, torch.optim.RMSprop):
-        
         # Compute adaptive scaling matrix D (sqrt) for effective Hessian
         v_t = torch.cat([state['square_avg'].reshape(-1)
                         for state in optimizer.state.values()]
                         ).detach()
-
         eps = optimizer.param_groups[0]['eps']
         D_sqrt = torch.sqrt(1 / torch.sqrt(v_t + eps))
-
-        # Compute effective Hessian-vector product
         def Av(v):
             return D_sqrt * Hv(D_sqrt * v)
-        
+        lambda_A = power_iteration(Av)
+
+    elif isinstance(optimizer, (torch.optim.Adam, torch.optim.AdamW)):
+
+        g0 = optimizer.param_groups[0]
+        beta1, beta2 = g0["betas"]
+        eps = g0["eps"]
+
+        # get v_t
+        v_t = torch.cat([
+            optimizer.state[p]["exp_avg_sq"].reshape(-1)
+            for p in model.param_list
+            if p in optimizer.state and "exp_avg_sq" in optimizer.state[p]
+        ]).detach()
+
+        # bias corrections
+        bc1 = 1.0 - (beta1 ** t)
+        bc2 = 1.0 - (beta2 ** t)
+        v_hat = v_t / bc2
+
+        # Compute adaptive scaling matrix D (sqrt) for effective Hessian
+        D_sqrt = (v_hat + eps).pow(-0.25) / (bc1 ** 0.5)
+
+        def Av(v):
+            return D_sqrt * Hv(D_sqrt * v)
+
         lambda_A = power_iteration(Av)
     else:
         lambda_A = None
@@ -322,11 +365,10 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
         y_loss = y.to(device)
 
     start = time.time()
-    
     train_acc = 0.0
     epoch = 0
 
-    while train_acc < accuracy and epoch < epochs :
+    while train_acc < accuracy and epoch < epochs:
 
         optimizer.zero_grad()
         outputs = model(X)
@@ -338,7 +380,7 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
 
         if epoch % (epochs // 100) == 0:
             H_sharps[epoch], A_sharps[epoch] = get_hessian_metrics(
-                model, optimizer, criterion, X, y_loss
+                model, optimizer, criterion, X, y_loss, epoch + 1
             )
 
         with torch.no_grad():
@@ -350,12 +392,6 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
             train_accuracies[epoch] = train_acc
             test_accuracies[epoch] = test_acc
         model.train()
-
-        if (epoch+1) % 1000 == 0:
-            print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}, " +
-                  f"Time: {round(((time.time() - start) / 60), 2)}, " +
-                  f"Train Acc: {train_accuracies[epoch]:.4f}, " +
-                  f"Test Acc: {test_accuracies[epoch]:.4f}, ")
         epoch += 1
 
     metadata, output_data = setup_output_files(output_dir)
@@ -368,6 +404,8 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
         "optimizer": optimizer.__class__.__name__,
         "criterion": criterion.__class__.__name__,
         "learning_rate": learning_rate,
+        "beta1": optimizer.param_groups[0].get('betas', (np.nan, np.nan))[0],
+        "beta2": optimizer.param_groups[0].get('betas', (np.nan, np.nan))[1],
         "momentum": momentum,
         "num_epochs": epochs,
         "time_minutes": round((time.time() - start) / 60, 2),
@@ -384,3 +422,751 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
     })], ignore_index=True)
 
     save_output_files(metadata, output_data, output_dir)
+
+def train_minibatch_sgd_model(model, optimizer, criterion, epochs, accuracy,
+                         train_loader, test_loader, X_full, y_full, output_dir):
+    """
+    Trains a model using minibatch sgd and computes Hessian metrics for both the batch and full dataset.
+
+    Args:
+        model: The neural network model
+        optimizer: The optimizer (e.g., SGD, Adam)
+        criterion: Loss function
+        epochs: Maximum number of epochs
+        accuracy: Target accuracy to stop training early
+        train_loader: DataLoader for mini-batch training
+        test_loader: DataLoader for test evaluation
+        X_full: Full training dataset tensor
+        y_full: Full training labels tensor
+        output_dir: Directory to save output files
+    """
+    print(f"Training {model.__class__.__name__} with " +
+          f"{optimizer.__class__.__name__} and learning rate " +
+          f"{optimizer.param_groups[0]['lr']} for {epochs} epochs.")
+
+    learning_rate = optimizer.param_groups[0]['lr']
+    momentum = optimizer.param_groups[0].get('momentum', 0.0)
+
+    model.to(device)
+    model.train()
+
+    # Arrays to store metrics per epoch
+    train_losses = np.full(epochs, np.nan)
+    train_accuracies = np.full(epochs, np.nan)
+    test_accuracies = np.full(epochs, np.nan)
+
+    # Separate sharpness metrics for mini-batch and full dataset
+    H_sharps_batch = np.full(epochs, np.nan)  # Mini-batch sharpness
+    H_sharps_full = np.full(epochs, np.nan)   # Full-dataset sharpness
+
+    start = time.time()
+    train_acc = 0.0
+    epoch = 0
+
+    # Prepare y_full for loss computation
+    if isinstance(criterion, nn.MSELoss):
+        y_full_loss = torch.nn.functional.one_hot(
+            y_full, num_classes=model.num_labels).float().to(device)
+    else:
+        y_full_loss = y_full
+
+    while train_acc < accuracy and epoch < epochs:
+        epoch_loss = 0.0
+        num_batches = 0
+
+        batch_H_list = []
+        batch_A_list = []
+
+        # Mini-batch training
+        for X_batch, y_batch in train_loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+
+            if isinstance(criterion, nn.MSELoss):
+                y_batch_loss = torch.nn.functional.one_hot(
+                    y_batch, num_classes=model.num_labels).float().to(device)
+            else:
+                y_batch_loss = y_batch
+
+            # Calculate mini-batch sharpness periodically
+            if num_batches % 10 == 0:
+                h_s, a_s = get_hessian_metrics(
+                    model, optimizer, criterion, X_batch, y_batch_loss, epoch + 1
+                )
+                if h_s is not None: batch_H_list.append(h_s)
+                if a_s is not None: batch_A_list.append(a_s)
+
+            # Standard training step
+            optimizer.zero_grad()
+            outputs = model(X_batch)
+            loss = criterion(outputs, y_batch_loss)
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            num_batches += 1
+
+        train_losses[epoch] = epoch_loss / num_batches
+
+        # Store average batch sharpness for this epoch
+        if batch_H_list:
+            H_sharps_batch[epoch] = np.mean(batch_H_list)
+
+
+        # Full-dataset sharpness
+        h_s_full, a_s_full = get_hessian_metrics(
+            model, optimizer, criterion, X_full, y_full_loss, epoch + 1
+        )
+        H_sharps_full[epoch] = h_s_full
+
+        # Calculate full-dataset sharpness periodically
+        eval_interval = max(1, epochs // 100)
+        if epoch % eval_interval == 0 or epoch == epochs - 1:
+            # Accuracy evaluation
+            with torch.no_grad():
+                model.eval()
+
+                # Train accuracy
+                train_correct, train_total = 0, 0
+                for xb, yb in train_loader:
+                    xb = xb.to(device)
+                    out = model(xb)
+                    train_correct += (out.argmax(dim=1) == yb.to(device)).sum().item()
+                    train_total += yb.size(0)
+                train_acc = train_correct / train_total
+                train_accuracies[epoch] = train_acc
+
+                # Test accuracy
+                test_correct, test_total = 0, 0
+                for xb, yb in test_loader:
+                    xb = xb.to(device)
+                    out = model(xb)
+                    test_correct += (out.argmax(dim=1) == yb.to(device)).sum().item()
+                    test_total += yb.size(0)
+                test_accuracies[epoch] = test_correct / test_total
+
+            model.train()
+
+        if (epoch+1) % 100 == 0:
+            print(f"Epoch [{epoch+1}/{epochs}], Loss: {train_losses[epoch]:.4f}, " +
+                  f"Batch Sharp: {H_sharps_batch[epoch]:.2f}, " +
+                  f"Full Sharp: {H_sharps_full[epoch]:.2f}, " +
+                  f"Train Acc: {train_acc:.4f}")
+
+        epoch += 1
+
+    print(f"Completed training of {model.__class__.__name__} with " +
+          f"{optimizer.__class__.__name__} and learning rate " +
+          f"{optimizer.param_groups[0]['lr']}. Took {epoch} epochs and " +
+          f"{round(time.time() - start, 2)} seconds. " +
+          f"Final training accuracy: {train_acc:.4f}; " +
+          f"Final testing accuracy: {test_accuracies[epoch-1]:.4f}")
+
+    # Save results
+    metadata, output_data = setup_output_files(output_dir)
+    model_id = metadata.shape[0] + 1
+
+    print(f"Saved with model_id {model_id}")
+    print("=================================================")
+
+    metadata.loc[metadata.shape[0]] = {
+        "model_id": model_id,
+        "model_type": model.__class__.__name__,
+        "activation_function": model.activation.__name__,
+        "optimizer": optimizer.__class__.__name__,
+        "criterion": criterion.__class__.__name__,
+        "learning_rate": learning_rate,
+        "momentum": momentum,
+        "num_epochs": epoch,
+        "time_minutes": round((time.time() - start) / 60, 2),
+    }
+
+    # Create output dataframe with both batch and full sharpness metrics
+    new_output = pd.DataFrame({
+        "model_id": np.ones(epoch) * model_id,
+        "epoch": np.arange(1, epoch + 1),
+        "train_loss": train_losses[:epoch],
+        "sharpness_H_batch": H_sharps_batch[:epoch],      # Mini-batch H sharpness
+        "sharpness_H_full": H_sharps_full[:epoch],        # Full-dataset H sharpness
+        "test_accuracy": test_accuracies[:epoch],
+        "train_accuracy": train_accuracies[:epoch],
+    })
+
+    output_data = pd.concat([output_data, new_output], ignore_index=True)
+    save_output_files(metadata, output_data, output_dir)
+
+def generate_gd_quadratic_plot():
+    A = np.array([[1, 1],
+                [1, 8]])
+
+    def f(x, y):
+        X = np.array([x, y])
+        return 0.5 * X.T @ A @ X
+
+    def grad(x):
+        return A @ x
+
+    lambda_max = np.linalg.eigvalsh(A).max()
+
+    eta_conv = 1.8 / lambda_max
+    eta_div = 2.05 / lambda_max
+    steps = 20
+
+    xs_conv = []
+    xs_div = []
+    x_conv = np.array([-2.5, 1.5])
+    x_div = np.array([-2.5, 1.5])
+
+    for _ in range(steps):
+        xs_conv.append(x_conv.copy())
+        xs_div.append(x_div.copy())
+        x_conv = x_conv - eta_conv * grad(x_conv)
+        x_div = x_div - eta_div * grad(x_div)
+
+    xs_conv = np.array(xs_conv)
+    xs_div = np.array(xs_div)
+
+    gx = np.linspace(-3, 3, 200)
+    gy = np.linspace(-3, 3, 200)
+    X, Y = np.meshgrid(gx, gy)
+    Z = 0.5*(A[0,0]*X**2 + 2*A[0,1]*X*Y + A[1,1]*Y**2)
+
+    fig = make_subplots(rows = 1, cols = 2, horizontal_spacing=0.05,
+                        subplot_titles=("η < 2 / λ_max", "η > 2 / λ_max"))
+
+    fig.add_trace(go.Contour(
+        x=gx, y=gy, z=Z,
+        contours=dict(
+            coloring="lines",
+            showlabels=False
+        ),
+        line_width=1,
+        colorscale="Viridis",
+        showscale=False
+    ), row=1, col=1)
+
+    fig.add_trace(go.Contour(
+        x=gx, y=gy, z=Z,
+        contours=dict(
+            coloring="lines",
+            showlabels=False
+        ),
+        line_width=1,
+        colorscale="Viridis",
+        showscale=False
+    ), row=1, col=2)
+
+    fig.add_trace(go.Scatter(
+        x=xs_conv[:,0], y=xs_conv[:,1],
+        mode="lines+markers",
+        line=dict(width=2, color="red"),
+        marker=dict(size=5, color="red"),
+        name="GD Path"
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=xs_div[:,0], y=xs_div[:,1],
+        mode="lines+markers",
+        line=dict(width=2, color="red"),
+        marker=dict(size=5, color="red"),
+        name="GD Path"
+    ), row=1, col=2)
+
+    fig.update_yaxes(showticklabels=True, ticks="", row=1, col=1)
+    fig.update_yaxes(showticklabels=False, ticks="", row=1, col=2)
+
+    fig.update_layout(
+        title=dict(text="Gradient Descent on a Quadratic", x =0.5),
+        xaxis1_title="x₁",
+        yaxis1_title="x₂",
+        xaxis2_title="x₁",
+        width=600,
+        height=300,
+        showlegend=False,
+        margin=dict(l=15, r=60, t=80, b=30)
+    )
+
+    fig.show()
+    fig.write_html("plots/gd_quadratic.html")
+
+def plot_sgd_fcnn_data(metadata, output, model_ids_mse, model_ids_ce, save=True):
+
+    max_epoch_mse = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_mse))]
+        ["epoch"]
+        .max()
+    )
+    xs_mse = np.arange(max_epoch_mse)
+
+    max_epoch_ce = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_ce))]
+        ["epoch"]
+        .max()
+    )
+    xs_ce = np.arange(max_epoch_ce)
+
+    fig = make_subplots(rows = 2, cols = 2, 
+                        vertical_spacing=0.1, shared_xaxes=True,
+                        subplot_titles=["MSE Loss", "Cross-Entropy Loss"] )
+    colors = px.colors.qualitative.D3[:3]
+
+    for i, model_id in enumerate(model_ids_mse):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_H']
+    
+        sharpness_H_lim = 2 / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend",
+                       showlegend=True), 
+            row=1, col=1
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=sharpness_H, name= "Sharpness of H", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=1
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=1)
+        
+    for i, model_id in enumerate(model_ids_ce):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_H']
+    
+        sharpness_H_lim = 2 / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend2",
+                       showlegend=True), 
+            row=1, col=2
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=sharpness_H, name= "Sharpness of H", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=2
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=2)
+        
+    mse_y_sharp_max = 2 / metadata[metadata["model_id"]==model_ids_mse[-1]]["learning_rate"].iloc[0]*1.1
+    ce_y_sharp_max = 2 / metadata[metadata["model_id"]==model_ids_ce[-1]]["learning_rate"].iloc[0]*1.2
+
+
+    fig.update_yaxes(title_text="Training Loss",
+                    range = [0,0.08],
+                    row=1, col=1)
+    fig.update_yaxes(title_text="Sharpness",
+                    range = [10, mse_y_sharp_max],
+                    row=2, col=1)
+    fig.update_yaxes(title_text="",
+                    range = [0,1.5],
+                    row=1, col=2)
+    fig.update_yaxes(title_text="",
+                    range = [20, ce_y_sharp_max],
+                    row=2, col=2)
+    
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="", row=1, col=2)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=2)
+
+    fig.update_layout(height = 400, width = 800, 
+                      title = dict(text=f"FCNN with GD on CIFAR-10", x = 0.5),
+                      legend=dict(x=0.29, y=0.99,
+                                  bgcolor='rgba(255, 255, 255, 0.3)'),
+                      legend2=dict(x=0.83, y=0.99,
+                                   bgcolor='rgba(255, 255, 255, 0.3)')
+                    )
+    if save:
+        fig.write_html("plots/gd_fcnn_cifar10.html")
+    fig.show()
+
+def plot_sgdm_fcnn_data(metadata, output, model_ids_mse, model_ids_ce, save=True):
+
+    max_epoch_mse = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_mse))]
+        ["epoch"]
+        .max()
+    )
+    xs_mse = np.arange(max_epoch_mse)
+
+    max_epoch_ce = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_ce))]
+        ["epoch"]
+        .max()
+    )
+    xs_ce = np.arange(max_epoch_ce)
+
+    fig = make_subplots(rows = 2, cols = 2, 
+                        vertical_spacing=0.1, shared_xaxes=True,
+                        subplot_titles=["MSE Loss", "Cross-Entropy Loss"] )
+    colors = px.colors.qualitative.D3[:3]
+
+    for i, model_id in enumerate(model_ids_mse):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        momentum = 0.9
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_H']
+        
+        sharpness_H_lim = 2 * (1 + momentum) / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend",
+                       showlegend=True), 
+            row=1, col=1
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=sharpness_H, name= "Sharpness of H", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=1
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=1)
+        
+    for i, model_id in enumerate(model_ids_ce):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        momentum = 0.9
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_H']
+    
+        sharpness_H_lim = 2 * (1 + momentum) / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend2",
+                       showlegend=True), 
+            row=1, col=2
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=sharpness_H, name= "Sharpness of H", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=2
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=2)
+        
+    mse_y_sharp_max = (
+        2 * (1 + 0.9) 
+          / metadata[metadata["model_id"]==model_ids_mse[-1]]
+                    ["learning_rate"].iloc[0] 
+          * 1.1
+    )
+
+    ce_y_sharp_max = (
+        2 * (1 + 0.9) 
+          / metadata[metadata["model_id"]==model_ids_ce[-1]]
+                    ["learning_rate"].iloc[0]
+          *1.2
+    )
+
+
+    fig.update_yaxes(title_text="Training Loss",
+                    range = [0,0.08],
+                    row=1, col=1)
+    fig.update_yaxes(title_text="Sharpness",
+                    range = [10, mse_y_sharp_max],
+                    row=2, col=1)
+    fig.update_yaxes(title_text="",
+                    range = [0,2],
+                    row=1, col=2)
+    fig.update_yaxes(title_text="",
+                    range = [0, ce_y_sharp_max],
+                    row=2, col=2)
+    
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="", row=1, col=2)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=2)
+
+    fig.update_layout(height = 400, width = 800, 
+                      title = dict(text=f"FCNN with GD and Momentum on CIFAR-10", x = 0.5),
+                      legend=dict(x=0.29, y=0.99,
+                                  bgcolor='rgba(255, 255, 255, 0.3)'),
+                      legend2=dict(x=0.83, y=0.99,
+                                   bgcolor='rgba(255, 255, 255, 0.3)')
+                    )
+    if save:
+        fig.write_html("plots/gd_mom_fcnn_cifar10.html")
+    fig.show()
+
+def plot_rmsprop_fcnn_data(metadata, output, model_ids_mse, model_ids_ce, save=True):
+
+    max_epoch_mse = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_mse))]
+        ["epoch"]
+        .max()
+    )
+    xs_mse = np.arange(max_epoch_mse)
+
+    max_epoch_ce = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_ce))]
+        ["epoch"]
+        .max()
+    )
+    xs_ce = np.arange(max_epoch_ce)
+
+    fig = make_subplots(rows = 2, cols = 2, 
+                        vertical_spacing=0.1, shared_xaxes=True,
+                        subplot_titles=["MSE Loss", "Cross-Entropy Loss"] )
+    colors = px.colors.qualitative.D3[:3]
+
+    for i, model_id in enumerate(model_ids_mse):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_A']
+        
+        sharpness_H_lim = 2 / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend",
+                       showlegend=True), 
+            row=1, col=1
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=sharpness_H, name= "Sharpness of Effective Hessian", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=1
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=1)
+        
+    for i, model_id in enumerate(model_ids_ce):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_A']
+    
+        sharpness_H_lim = 2 / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend2",
+                       showlegend=True), 
+            row=1, col=2
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=sharpness_H, name= "Sharpness of Effective Hessian", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=2
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=2)
+
+    mse_y_sharp_max = (
+        2 / metadata[metadata["model_id"]==model_ids_mse[-1]]
+                    ["learning_rate"].iloc[0] 
+          * 1.1
+    )
+
+    ce_y_sharp_max = (
+        2 / metadata[metadata["model_id"]==model_ids_ce[-1]]
+                    ["learning_rate"].iloc[0]
+          * 1.2
+    )
+
+    fig.update_yaxes(title_text="Training Loss",
+                    range = [0.01, 0.11],
+                    row=1, col=1)
+    fig.update_yaxes(title_text="Sharpness",
+                    range = [0, mse_y_sharp_max],
+                    row=2, col=1)
+    fig.update_yaxes(title_text="",
+                    range = [0,1.75],
+                    row=1, col=2)
+    fig.update_yaxes(title_text="",
+                    range = [0, ce_y_sharp_max],
+                    row=2, col=2)
+    
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="", row=1, col=2)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=2)
+
+    fig.update_layout(height = 400, width = 800, 
+                      title = dict(text=f"FCNN with RMSProp on CIFAR-10", x = 0.5),
+                      legend=dict(x=0.29, y=0.99,
+                                  bgcolor='rgba(255, 255, 255, 0.3)'),
+                      legend2=dict(x=0.83, y=0.99,
+                                   bgcolor='rgba(255, 255, 255, 0.3)')
+                    )
+    if save:
+        fig.write_html("plots/rmsprop_fcnn_cifar10.html")
+    fig.show()
+
+def plot_adam_fcnn_data(metadata, output, model_ids_mse, model_ids_ce, save=True):
+
+    max_epoch_mse = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_mse))]
+        ["epoch"]
+        .max()
+    )
+    xs_mse = np.arange(max_epoch_mse)
+
+    max_epoch_ce = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_ce))]
+        ["epoch"]
+        .max()
+    )
+    xs_ce = np.arange(max_epoch_ce)
+
+    fig = make_subplots(rows = 2, cols = 2, 
+                        vertical_spacing=0.1, shared_xaxes=True,
+                        subplot_titles=["MSE Loss", "Cross-Entropy Loss"] )
+    colors = px.colors.qualitative.D3[:3]
+
+    for i, model_id in enumerate(model_ids_mse):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        beta1 = md["beta1"].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_A']
+        
+        sharpness_H_lim = 2 * (1 + beta1) / ((1 - beta1) * lr)
+        
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend",
+                       showlegend=True), 
+            row=1, col=1
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=sharpness_H, name= "Sharpness of Effective Hessian", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=1
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=1)
+        
+    for i, model_id in enumerate(model_ids_ce):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        beta1 = md["beta1"].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_A']
+    
+        sharpness_H_lim = 2 * (1 + beta1) / ((1 - beta1) * lr)
+        
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend2",
+                       showlegend=True), 
+            row=1, col=2
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=sharpness_H, name= "Sharpness of Effective Hessian", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=2
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=2)
+
+    mse_y_sharp_max = (
+        2 * (1 + metadata[metadata["model_id"]==model_ids_mse[-1]]
+                         ["beta1"].iloc[0]) 
+          / metadata[metadata["model_id"]==model_ids_mse[-1]]
+                    ["learning_rate"].iloc[0] 
+          * 1.1
+    )
+
+    ce_y_sharp_max = (
+        2 * (1 + metadata[metadata["model_id"]==model_ids_ce[-1]]
+                         ["beta1"].iloc[0]) 
+          / metadata[metadata["model_id"]==model_ids_ce[-1]]
+                    ["learning_rate"].iloc[0]
+          *1.2
+    )
+
+    fig.update_yaxes(title_text="Training Loss",
+                    range = [0, 0.03974],
+                    row=1, col=1)
+    fig.update_yaxes(title_text="Sharpness",
+                    range = [0, 4.571e5],
+                    row=2, col=1)
+    fig.update_yaxes(title_text="",
+                    range = [0,.9096],
+                    row=1, col=2)
+    fig.update_yaxes(title_text="",
+                    range = [0, 4.560e4],
+                    row=2, col=2)
+    
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="", row=1, col=2)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=2)
+
+    fig.update_layout(height = 400, width = 800, 
+                      title = dict(text=f"FCNN with Adam on CIFAR-10", x = 0.5),
+                      legend=dict(x=0.29, y=0.99,
+                                  bgcolor='rgba(255, 255, 255, 0.3)'),
+                      legend2=dict(x=0.83, y=0.99,
+                                   bgcolor='rgba(255, 255, 255, 0.3)')
+                    )
+    if save:
+        fig.write_html("plots/adam_fcnn_cifar10.html")
+    fig.show()
