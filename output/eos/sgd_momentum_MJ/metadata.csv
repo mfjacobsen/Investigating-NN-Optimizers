@@ -1,0 +1,7 @@
+model_id,model_type,activation_function,optimizer,criterion,learning_rate,beta1,beta2,num_epochs,time_minutes
+1,FullyConnectedNet,Tanh,SGD,MSELoss,0.14,,,8000,0.42
+2,FullyConnectedNet,Tanh,SGD,MSELoss,0.12,,,8000,0.23
+3,FullyConnectedNet,Tanh,SGD,MSELoss,0.1,,,8000,0.16
+4,FullyConnectedNet,Tanh,SGD,CrossEntropyLoss,0.1,,,500,0.03
+5,FullyConnectedNet,Tanh,SGD,CrossEntropyLoss,0.06,,,500,0.04
+6,FullyConnectedNet,Tanh,SGD,CrossEntropyLoss,0.04,,,500,0.05
