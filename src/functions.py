@@ -593,3 +593,580 @@ def train_minibatch_sgd_model(model, optimizer, criterion, epochs, accuracy,
 
     output_data = pd.concat([output_data, new_output], ignore_index=True)
     save_output_files(metadata, output_data, output_dir)
+
+def generate_gd_quadratic_plot():
+    A = np.array([[1, 1],
+                [1, 8]])
+
+    def f(x, y):
+        X = np.array([x, y])
+        return 0.5 * X.T @ A @ X
+
+    def grad(x):
+        return A @ x
+
+    lambda_max = np.linalg.eigvalsh(A).max()
+
+    eta_conv = 1.8 / lambda_max
+    eta_div = 2.05 / lambda_max
+    steps = 20
+
+    xs_conv = []
+    xs_div = []
+    x_conv = np.array([-2.5, 1.5])
+    x_div = np.array([-2.5, 1.5])
+
+    for _ in range(steps):
+        xs_conv.append(x_conv.copy())
+        xs_div.append(x_div.copy())
+        x_conv = x_conv - eta_conv * grad(x_conv)
+        x_div = x_div - eta_div * grad(x_div)
+
+    xs_conv = np.array(xs_conv)
+    xs_div = np.array(xs_div)
+
+    gx = np.linspace(-3, 3, 200)
+    gy = np.linspace(-3, 3, 200)
+    X, Y = np.meshgrid(gx, gy)
+    Z = 0.5*(A[0,0]*X**2 + 2*A[0,1]*X*Y + A[1,1]*Y**2)
+
+    fig = make_subplots(rows = 1, cols = 2, horizontal_spacing=0.05,
+                        subplot_titles=("η < 2 / λ_max", "η > 2 / λ_max"))
+
+    fig.add_trace(go.Contour(
+        x=gx, y=gy, z=Z,
+        contours=dict(
+            coloring="lines",
+            showlabels=False
+        ),
+        line_width=1,
+        colorscale="Viridis",
+        showscale=False
+    ), row=1, col=1)
+
+    fig.add_trace(go.Contour(
+        x=gx, y=gy, z=Z,
+        contours=dict(
+            coloring="lines",
+            showlabels=False
+        ),
+        line_width=1,
+        colorscale="Viridis",
+        showscale=False
+    ), row=1, col=2)
+
+    fig.add_trace(go.Scatter(
+        x=xs_conv[:,0], y=xs_conv[:,1],
+        mode="lines+markers",
+        line=dict(width=2, color="red"),
+        marker=dict(size=5, color="red"),
+        name="GD Path"
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=xs_div[:,0], y=xs_div[:,1],
+        mode="lines+markers",
+        line=dict(width=2, color="red"),
+        marker=dict(size=5, color="red"),
+        name="GD Path"
+    ), row=1, col=2)
+
+    fig.update_yaxes(showticklabels=True, ticks="", row=1, col=1)
+    fig.update_yaxes(showticklabels=False, ticks="", row=1, col=2)
+
+    fig.update_layout(
+        title=dict(text="Gradient Descent on a Quadratic", x =0.5),
+        xaxis1_title="x₁",
+        yaxis1_title="x₂",
+        xaxis2_title="x₁",
+        width=600,
+        height=300,
+        showlegend=False,
+        margin=dict(l=15, r=60, t=80, b=30)
+    )
+
+    fig.show()
+    fig.write_html("plots/gd_quadratic.html")
+
+def plot_sgd_fcnn_data(metadata, output, model_ids_mse, model_ids_ce, save=True):
+
+    max_epoch_mse = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_mse))]
+        ["epoch"]
+        .max()
+    )
+    xs_mse = np.arange(max_epoch_mse)
+
+    max_epoch_ce = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_ce))]
+        ["epoch"]
+        .max()
+    )
+    xs_ce = np.arange(max_epoch_ce)
+
+    fig = make_subplots(rows = 2, cols = 2, 
+                        vertical_spacing=0.1, shared_xaxes=True,
+                        subplot_titles=["MSE Loss", "Cross-Entropy Loss"] )
+    colors = px.colors.qualitative.D3[:3]
+
+    for i, model_id in enumerate(model_ids_mse):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_H']
+    
+        sharpness_H_lim = 2 / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend",
+                       showlegend=True), 
+            row=1, col=1
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=sharpness_H, name= "Sharpness of H", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=1
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=1)
+        
+    for i, model_id in enumerate(model_ids_ce):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_H']
+    
+        sharpness_H_lim = 2 / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend2",
+                       showlegend=True), 
+            row=1, col=2
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=sharpness_H, name= "Sharpness of H", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=2
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=2)
+        
+    mse_y_sharp_max = 2 / metadata[metadata["model_id"]==model_ids_mse[-1]]["learning_rate"].iloc[0]*1.1
+    ce_y_sharp_max = 2 / metadata[metadata["model_id"]==model_ids_ce[-1]]["learning_rate"].iloc[0]*1.2
+
+
+    fig.update_yaxes(title_text="Training Loss",
+                    range = [0,0.08],
+                    row=1, col=1)
+    fig.update_yaxes(title_text="Sharpness",
+                    range = [10, mse_y_sharp_max],
+                    row=2, col=1)
+    fig.update_yaxes(title_text="",
+                    range = [0,1.5],
+                    row=1, col=2)
+    fig.update_yaxes(title_text="",
+                    range = [20, ce_y_sharp_max],
+                    row=2, col=2)
+    
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="", row=1, col=2)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=2)
+
+    fig.update_layout(height = 400, width = 800, 
+                      title = dict(text=f"FCNN with GD on CIFAR-10", x = 0.5),
+                      legend=dict(x=0.29, y=0.99,
+                                  bgcolor='rgba(255, 255, 255, 0.3)'),
+                      legend2=dict(x=0.83, y=0.99,
+                                   bgcolor='rgba(255, 255, 255, 0.3)')
+                    )
+    if save:
+        fig.write_html("plots/gd_fcnn_cifar10.html")
+    fig.show()
+
+def plot_sgdm_fcnn_data(metadata, output, model_ids_mse, model_ids_ce, save=True):
+
+    max_epoch_mse = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_mse))]
+        ["epoch"]
+        .max()
+    )
+    xs_mse = np.arange(max_epoch_mse)
+
+    max_epoch_ce = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_ce))]
+        ["epoch"]
+        .max()
+    )
+    xs_ce = np.arange(max_epoch_ce)
+
+    fig = make_subplots(rows = 2, cols = 2, 
+                        vertical_spacing=0.1, shared_xaxes=True,
+                        subplot_titles=["MSE Loss", "Cross-Entropy Loss"] )
+    colors = px.colors.qualitative.D3[:3]
+
+    for i, model_id in enumerate(model_ids_mse):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        momentum = 0.9
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_H']
+        
+        sharpness_H_lim = 2 * (1 + momentum) / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend",
+                       showlegend=True), 
+            row=1, col=1
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=sharpness_H, name= "Sharpness of H", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=1
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=1)
+        
+    for i, model_id in enumerate(model_ids_ce):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        momentum = 0.9
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_H']
+    
+        sharpness_H_lim = 2 * (1 + momentum) / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend2",
+                       showlegend=True), 
+            row=1, col=2
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=sharpness_H, name= "Sharpness of H", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=2
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=2)
+        
+    mse_y_sharp_max = (
+        2 * (1 + 0.9) 
+          / metadata[metadata["model_id"]==model_ids_mse[-1]]
+                    ["learning_rate"].iloc[0] 
+          * 1.1
+    )
+
+    ce_y_sharp_max = (
+        2 * (1 + 0.9) 
+          / metadata[metadata["model_id"]==model_ids_ce[-1]]
+                    ["learning_rate"].iloc[0]
+          *1.2
+    )
+
+
+    fig.update_yaxes(title_text="Training Loss",
+                    range = [0,0.08],
+                    row=1, col=1)
+    fig.update_yaxes(title_text="Sharpness",
+                    range = [10, mse_y_sharp_max],
+                    row=2, col=1)
+    fig.update_yaxes(title_text="",
+                    range = [0,2],
+                    row=1, col=2)
+    fig.update_yaxes(title_text="",
+                    range = [0, ce_y_sharp_max],
+                    row=2, col=2)
+    
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="", row=1, col=2)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=2)
+
+    fig.update_layout(height = 400, width = 800, 
+                      title = dict(text=f"FCNN with GD and Momentum on CIFAR-10", x = 0.5),
+                      legend=dict(x=0.29, y=0.99,
+                                  bgcolor='rgba(255, 255, 255, 0.3)'),
+                      legend2=dict(x=0.83, y=0.99,
+                                   bgcolor='rgba(255, 255, 255, 0.3)')
+                    )
+    if save:
+        fig.write_html("plots/gd_mom_fcnn_cifar10.html")
+    fig.show()
+
+def plot_rmsprop_fcnn_data(metadata, output, model_ids_mse, model_ids_ce, save=True):
+
+    max_epoch_mse = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_mse))]
+        ["epoch"]
+        .max()
+    )
+    xs_mse = np.arange(max_epoch_mse)
+
+    max_epoch_ce = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_ce))]
+        ["epoch"]
+        .max()
+    )
+    xs_ce = np.arange(max_epoch_ce)
+
+    fig = make_subplots(rows = 2, cols = 2, 
+                        vertical_spacing=0.1, shared_xaxes=True,
+                        subplot_titles=["MSE Loss", "Cross-Entropy Loss"] )
+    colors = px.colors.qualitative.D3[:3]
+
+    for i, model_id in enumerate(model_ids_mse):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_A']
+        
+        sharpness_H_lim = 2 / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend",
+                       showlegend=True), 
+            row=1, col=1
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=sharpness_H, name= "Sharpness of Effective Hessian", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=1
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=1)
+        
+    for i, model_id in enumerate(model_ids_ce):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_A']
+    
+        sharpness_H_lim = 2 / lr
+        
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend2",
+                       showlegend=True), 
+            row=1, col=2
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=sharpness_H, name= "Sharpness of Effective Hessian", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=2
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=2)
+
+    mse_y_sharp_max = (
+        2 / metadata[metadata["model_id"]==model_ids_mse[-1]]
+                    ["learning_rate"].iloc[0] 
+          * 1.1
+    )
+
+    ce_y_sharp_max = (
+        2 / metadata[metadata["model_id"]==model_ids_ce[-1]]
+                    ["learning_rate"].iloc[0]
+          * 1.2
+    )
+
+    fig.update_yaxes(title_text="Training Loss",
+                    range = [0.01, 0.11],
+                    row=1, col=1)
+    fig.update_yaxes(title_text="Sharpness",
+                    range = [0, mse_y_sharp_max],
+                    row=2, col=1)
+    fig.update_yaxes(title_text="",
+                    range = [0,1.75],
+                    row=1, col=2)
+    fig.update_yaxes(title_text="",
+                    range = [0, ce_y_sharp_max],
+                    row=2, col=2)
+    
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="", row=1, col=2)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=2)
+
+    fig.update_layout(height = 400, width = 800, 
+                      title = dict(text=f"FCNN with RMSProp on CIFAR-10", x = 0.5),
+                      legend=dict(x=0.29, y=0.99,
+                                  bgcolor='rgba(255, 255, 255, 0.3)'),
+                      legend2=dict(x=0.83, y=0.99,
+                                   bgcolor='rgba(255, 255, 255, 0.3)')
+                    )
+    if save:
+        fig.write_html("plots/rmsprop_fcnn_cifar10.html")
+    fig.show()
+
+def plot_adam_fcnn_data(metadata, output, model_ids_mse, model_ids_ce, save=True):
+
+    max_epoch_mse = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_mse))]
+        ["epoch"]
+        .max()
+    )
+    xs_mse = np.arange(max_epoch_mse)
+
+    max_epoch_ce = (
+        output
+        [(output["train_loss"].notna()) & (output["model_id"].isin(model_ids_ce))]
+        ["epoch"]
+        .max()
+    )
+    xs_ce = np.arange(max_epoch_ce)
+
+    fig = make_subplots(rows = 2, cols = 2, 
+                        vertical_spacing=0.1, shared_xaxes=True,
+                        subplot_titles=["MSE Loss", "Cross-Entropy Loss"] )
+    colors = px.colors.qualitative.D3[:3]
+
+    for i, model_id in enumerate(model_ids_mse):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        beta1 = md["beta1"].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_A']
+        
+        sharpness_H_lim = 2 * (1 + beta1) / ((1 - beta1) * lr)
+        
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend",
+                       showlegend=True), 
+            row=1, col=1
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_mse, y=sharpness_H, name= "Sharpness of Effective Hessian", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=1
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=1)
+        
+    for i, model_id in enumerate(model_ids_ce):
+        md = metadata[metadata['model_id']==model_id]
+        out = output[output['model_id']==model_id]
+        lr = md['learning_rate'].iloc[0]
+        beta1 = md["beta1"].iloc[0]
+        
+        losses = out['train_loss']
+        sharpness_H = out['sharpness_A']
+    
+        sharpness_H_lim = 2 * (1 + beta1) / ((1 - beta1) * lr)
+        
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=losses, name= f"η = {lr}",
+                       line=dict(width=2.5), marker_color=colors[i],
+                       legend="legend2",
+                       showlegend=True), 
+            row=1, col=2
+        )
+
+        fig.add_trace(
+            go.Scatter(x=xs_ce, y=sharpness_H, name= "Sharpness of Effective Hessian", 
+                       mode='markers', showlegend=False,
+                       marker=dict(size=5), marker_color=colors[i]),
+            row=2, col=2
+        )
+
+        fig.add_hline(y=sharpness_H_lim, line_dash="dash", line_color=colors[i], 
+                        row=2, col=2)
+
+    mse_y_sharp_max = (
+        2 * (1 + metadata[metadata["model_id"]==model_ids_mse[-1]]
+                         ["beta1"].iloc[0]) 
+          / metadata[metadata["model_id"]==model_ids_mse[-1]]
+                    ["learning_rate"].iloc[0] 
+          * 1.1
+    )
+
+    ce_y_sharp_max = (
+        2 * (1 + metadata[metadata["model_id"]==model_ids_ce[-1]]
+                         ["beta1"].iloc[0]) 
+          / metadata[metadata["model_id"]==model_ids_ce[-1]]
+                    ["learning_rate"].iloc[0]
+          *1.2
+    )
+
+    fig.update_yaxes(title_text="Training Loss",
+                    range = [0, 0.03974],
+                    row=1, col=1)
+    fig.update_yaxes(title_text="Sharpness",
+                    range = [0, 4.571e5],
+                    row=2, col=1)
+    fig.update_yaxes(title_text="",
+                    range = [0,.9096],
+                    row=1, col=2)
+    fig.update_yaxes(title_text="",
+                    range = [0, 4.560e4],
+                    row=2, col=2)
+    
+    fig.update_xaxes(title_text="", row=1, col=1)
+    fig.update_xaxes(title_text="", row=1, col=2)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=2)
+
+    fig.update_layout(height = 400, width = 800, 
+                      title = dict(text=f"FCNN with Adam on CIFAR-10", x = 0.5),
+                      legend=dict(x=0.29, y=0.99,
+                                  bgcolor='rgba(255, 255, 255, 0.3)'),
+                      legend2=dict(x=0.83, y=0.99,
+                                   bgcolor='rgba(255, 255, 255, 0.3)')
+                    )
+    if save:
+        fig.write_html("plots/adam_fcnn_cifar10.html")
+    fig.show()
