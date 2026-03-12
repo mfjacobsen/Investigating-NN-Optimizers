@@ -424,7 +424,7 @@ def train_model(model, optimizer, criterion, epochs, accuracy, X, y, X_test, y_t
     save_output_files(metadata, output_data, output_dir)
 
 def train_minibatch_sgd_model(model, optimizer, criterion, epochs, accuracy,
-                         train_loader, test_loader, X_full, y_full, output_dir):
+                              train_loader, test_loader, X_full, y_full, output_dir):
     """
     Trains a model using minibatch sgd and computes Hessian metrics for both the batch and full dataset.
 
