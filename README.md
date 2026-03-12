@@ -1,5 +1,23 @@
 # Investigating-NN-Optimizers
 
+## Introduction
+
+**Edge of Stability (EoS)** is the regime where neural network training operates at the boundary between stable and unstable dynamics. For SGD, stability is roughly when *sharpness*, the maximum eigenvalue of the loss Hessian, stays below about 2/η, with η the learning rate. When sharpness exceeds this threshold, training can diverge or exhibit oscillation, spikes, and degraded convergence.
+
+We investigate EoS behavior across SGD, Adam, Shampoo, and Muon on a shared setup: a small fully connected network on CIFAR-10, with learning rate sweeps and metrics such as sharpness, gradient norm, and update norm. A main focus is how adaptive optimizers like Adam change EoS behavior compared to SGD, e.g. oscillation rather than explosion, and how that ties to effective step size and preconditioning.
+
+### Project structure
+
+| Path | Description |
+|------|-------------|
+| `scripts/` | Entrypoints to run EoS experiments, e.g. `run_PP_adam_eos_python.py`, `run_EC_sgd.py`, `run_ZJ_shampoo.py` |
+| `notebooks/` | Per-optimizer EoS notebooks for Shampoo, SGD, Adam, Muon |
+| `src/` | Shared code for training, Hessian/sharpness, and data loading |
+| `output/eos/` | Experiment outputs: CSVs and per-run subdirectories |
+| `plots/` | Generated plots, e.g. `plots/adam_plots/` |
+
+For a more detailed experiment and output layout, see [EOS_EXPERIMENT_README.md](EOS_EXPERIMENT_README.md). For a short primer on EoS and sharpness, see [ADAM_EOS_NOTEBOOK_SUMMARY.md](ADAM_EOS_NOTEBOOK_SUMMARY.md).
+
 ### Local Setup
 
 Run the following code block to clone the Github repository and setup the 
@@ -77,9 +95,7 @@ python scripts/run_EC_sgd.py
 python scripts/run_PP_adam_eos_python.py
 ```
 
-Results are saved to `output/eos/` in subdirectories named by optimizer and author initials (e.g. `output/eos/shampoo_ZJ/`, `output/eos/sgd_EC/`, `output/eos/adam_PP/`).
-
-Plots and graphs are embedded in each notebook and can be viewed directly on GitHub.
+Results go to `output/eos/` in subdirectories named by optimizer and author initials, e.g. `output/eos/shampoo_ZJ/`, `output/eos/sgd_EC/`, `output/eos/adam_PP/`. The CSVs record per epoch training loss, accuracy, sharpness as the Hessian max eigenvalue, gradient norm, and parameter update norm. Plots are written to `plots/`, e.g. `plots/adam_plots/`, and are also embedded in each notebook so they render on GitHub.
 
 ### Notebooks
 
@@ -93,3 +109,15 @@ Plots and graphs are embedded in each notebook and can be viewed directly on Git
 | `MJ_muon_eos.ipynb` | Muon optimizer EoS investigation |
 | `MJ_sgd_eos.ipynb` | SGD EoS investigation (full batch) |
 | `MJ_adam_eos.ipynb` | Adam optimizer EoS investigation |
+
+### Further reading
+
+Cohen, Jeremy, Simran Kaur, Yuanzhi Li, J. Zico Kolter, and Ameet Talwalkar. 2021. [*Gradient Descent on Neural Networks Typically Occurs at the Edge of Stability*](https://arxiv.org/abs/2103.00065). CoRR abs/2103.00065.
+
+Andreyev, Arseniy, and Pierfrancesco Beneventano. 2025. *Edge of Stochastic Stability: Revisiting the Edge of Stability for SGD.*
+
+Cohen et al. 2024. *Adaptive Gradient Methods at the Edge of Stability.*
+
+### Contributors
+
+Notebooks and experiments are by project members; initials such as ZJ, EC, PP, MJ in notebook and output directory names indicate who led each part.
