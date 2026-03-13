@@ -1,27 +1,15 @@
 # Investigating-NN-Optimizers
 
-## Introduction
+Experiments on how different optimizers behave when neural network training hits the edge of stability.
 
-**Edge of Stability (EoS)** is the regime where neural network training operates at the boundary between stable and unstable dynamics. For SGD, stability is roughly when *sharpness*, the maximum eigenvalue of the loss Hessian, stays below about 2/η, with η the learning rate. When sharpness exceeds this threshold, training can diverge or exhibit oscillation, spikes, and degraded convergence.
+## What is this?
 
-We investigate EoS behavior across SGD, Adam, Shampoo, and Muon on a shared setup: a small fully connected network on CIFAR-10, with learning rate sweeps and metrics such as sharpness, gradient norm, and update norm. A main focus is how adaptive optimizers like Adam change EoS behavior compared to SGD, e.g. oscillation rather than explosion, and how that ties to effective step size and preconditioning.
+We train a small network on CIFAR-10 and compare optimizers: GD (full-batch), SGD (minibatch), Adam, Shampoo, and Muon. The goal is to see how each one behaves when the learning rate is pushed into the regime where training can go unstable or start oscillating. That regime is often called the *edge of stability*. GD is our baseline; the others let us compare different optimizer families. More background and the formal definition of sharpness and the stability threshold are in [ADAM_EOS_NOTEBOOK_SUMMARY.md](ADAM_EOS_NOTEBOOK_SUMMARY.md) and the papers below.
 
-### Project structure
+## Getting started
 
-| Path | Description |
-|------|-------------|
-| `scripts/` | Entrypoints to run EoS experiments, e.g. `run_PP_adam_eos_python.py`, `run_EC_sgd.py`, `run_ZJ_shampoo.py` |
-| `notebooks/` | Per-optimizer EoS notebooks for Shampoo, SGD, Adam, Muon |
-| `src/` | Shared code for training, Hessian/sharpness, and data loading |
-| `output/eos/` | Experiment outputs: CSVs and per-run subdirectories |
-| `plots/` | Generated plots, e.g. `plots/adam_plots/` |
+Clone the repo and create the conda environment:
 
-For a more detailed experiment and output layout, see [EOS_EXPERIMENT_README.md](EOS_EXPERIMENT_README.md). For a short primer on EoS and sharpness, see [ADAM_EOS_NOTEBOOK_SUMMARY.md](ADAM_EOS_NOTEBOOK_SUMMARY.md).
-
-### Local Setup
-
-Run the following code block to clone the Github repository and setup the 
-virtual environment:
 ```bash
 git clone https://github.com/mfjacobsen/Investigating-NN-Optimizers
 cd Investigating-NN-Optimizers
@@ -29,12 +17,48 @@ conda env create -f environment.yml
 conda activate inv-nn-opt-env
 ```
 
-### DSMLP Setup
-Run the following block in the terminal in DSMLP to clone the GitHub repository
-and set-up the conda environment. The environment is installed in the scratch
-directory since the size of pytorch exceeds the the default location's storage
-quota.
-``` bash
+## Running experiments
+
+From the repo root you can run:
+
+| Optimizer | Command |
+|-----------|---------|
+| Shampoo   | `python scripts/run_ZJ_shampoo.py` |
+| SGD       | `python scripts/run_EC_sgd.py` |
+| Adam      | `python scripts/run_PP_adam_eos_python.py` |
+
+For full-batch GD, use the notebook `notebooks/EC_gd.ipynb`.
+
+Results are written to `output/eos/` in subfolders named by optimizer and author initials (e.g. `gd_EC`, `sgd_EC`, `adam_PP`). Plots go to `plots/` and are also saved inside the notebooks.
+
+## Notebooks
+
+Each optimizer has one or more notebooks that reproduce or extend the script runs:
+
+| Notebook | Content |
+|----------|---------|
+| `EC_gd.ipynb` | GD, full-batch |
+| `EC_sgd.ipynb` | SGD, minibatch |
+| `ZJ_shampoo_eos.ipynb` | Shampoo |
+| `PP_adam_eos.ipynb`, `PP_adam_eos_v2.ipynb` | Adam |
+| `MJ_sgd_eos.ipynb`, `MJ_muon_eos.ipynb`, `MJ_adam_eos.ipynb` | SGD, Muon, Adam |
+| `ZJ_muon_eos_batchsize.ipynb` | Muon batch size sweep |
+
+## Repo layout
+
+- **scripts/** — Python scripts to run each optimizer.
+- **notebooks/** — Jupyter notebooks for the same experiments and extra analysis.
+- **src/** — Shared code (models, data loading, training, sharpness).
+- **output/eos/** — Experiment outputs (CSVs and run subfolders).
+- **plots/** — Generated figures.
+
+See [EOS_EXPERIMENT_README.md](EOS_EXPERIMENT_README.md) for a more detailed description of the experiment setup and outputs.
+
+## DSMLP setup
+
+If you are on DSMLP, use the scratch directory for the environment so PyTorch fits under the quota. Run this once:
+
+```bash
 cd ~
 mkdir -p /scratch/$USER/conda/envs
 mkdir -p /scratch/$USER/conda/pkgs
@@ -63,54 +87,22 @@ conda activate inv-nn-opt-env
 python -m ipykernel install --user --name inv-nn-opt-env --display-name "Python (inv-nn-opt-env)"
 ```
 
-For subsequent logins to DSMLP run:
-```
+After that, for each new session:
+
+```bash
 conda activate inv-nn-opt-env
 cd ~/private/Investigating-NN-Optimizers
 ```
 
-To update the environment when dependencies change run:
-```
+To refresh the environment after dependency changes:
+
+```bash
 conda activate base
 cd ~/private/Investigating-NN-Optimizers
 conda env update -n inv-nn-opt-env -f environment.yml --prune
 ```
 
-### Running Experiments
-
-From the repo root:
-
-**Shampoo EoS:**
-```bash
-python scripts/run_ZJ_shampoo.py
-```
-
-**SGD EoS:**
-```bash
-python scripts/run_EC_sgd.py
-```
-
-**Adam EoS:**
-```bash
-python scripts/run_PP_adam_eos_python.py
-```
-
-Results go to `output/eos/` in subdirectories named by optimizer and author initials, e.g. `output/eos/shampoo_ZJ/`, `output/eos/sgd_EC/`, `output/eos/adam_PP/`. The CSVs record per epoch training loss, accuracy, sharpness as the Hessian max eigenvalue, gradient norm, and parameter update norm. Plots are written to `plots/`, e.g. `plots/adam_plots/`, and are also embedded in each notebook so they render on GitHub.
-
-### Notebooks
-
-| Notebook | Description |
-|----------|-------------|
-| `ZJ_shampoo_eos.ipynb` | Shampoo optimizer EoS investigation |
-| `ZJ_muon_eos_batchsize.ipynb` | Muon optimizer minibatch size sweep |
-| `EC_sgd.ipynb` | SGD EoS investigation with minibatch training |
-| `PP_adam_eos.ipynb` | Adam optimizer EoS investigation |
-| `PP_adam_eos_v2.ipynb` | Adam optimizer EoS investigation (updated) |
-| `MJ_muon_eos.ipynb` | Muon optimizer EoS investigation |
-| `MJ_sgd_eos.ipynb` | SGD EoS investigation (full batch) |
-| `MJ_adam_eos.ipynb` | Adam optimizer EoS investigation |
-
-### Further reading
+## Further reading
 
 Cohen, Jeremy, Simran Kaur, Yuanzhi Li, J. Zico Kolter, and Ameet Talwalkar. 2021. [*Gradient Descent on Neural Networks Typically Occurs at the Edge of Stability*](https://arxiv.org/abs/2103.00065). CoRR abs/2103.00065.
 
@@ -118,6 +110,6 @@ Andreyev, Arseniy, and Pierfrancesco Beneventano. 2025. *Edge of Stochastic Stab
 
 Cohen et al. 2024. *Adaptive Gradient Methods at the Edge of Stability.*
 
-### Contributors
+## Contributors
 
-Notebooks and experiments are by project members; initials such as ZJ, EC, PP, MJ in notebook and output directory names indicate who led each part.
+Notebooks and experiments are by project members. Initials in notebook and output folder names (ZJ, EC, PP, MJ) indicate who led each part.
