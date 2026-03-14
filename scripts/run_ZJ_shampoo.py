@@ -92,7 +92,7 @@ for lr in learning_rates:
 # Plotting
 
 md = pd.read_csv(f"output/{output_dir}/metadata.csv")
-out = pd.read_csv(f"output/{output_dir}/training_log.csv")
+out = pd.read_csv(f"output/{output_dir}/output.csv")
 
 plot_dir = Path("../plots/shampoo_plots")
 plot_dir.mkdir(parents=True, exist_ok=True)
