@@ -16,8 +16,6 @@ We investigate EoS behavior across SGD, Adam, Shampoo, and Muon on a shared setu
 | `output/eos/` | Experiment outputs: CSVs and per-run subdirectories |
 | `plots/` | Generated plots, e.g. `plots/adam_plots/` |
 
-For a more detailed experiment and output layout, see [EOS_EXPERIMENT_README.md](EOS_EXPERIMENT_README.md). For a short primer on EoS and sharpness, see [ADAM_EOS_NOTEBOOK_SUMMARY.md](ADAM_EOS_NOTEBOOK_SUMMARY.md).
-
 ### Local Setup
 
 Run the following code block to clone the Github repository and setup the 
